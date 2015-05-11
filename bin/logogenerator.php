@@ -1,62 +1,16 @@
 #!/usr/bin/env php
 <?php
+/**
+ * Create cached logo images from entities coming from the Service Registry
+ *
+ * This script contacts the service registry to get the logo's from
+ * the available entities. Once these are loaded they will be cached in the
+ * www/authentication/cached directory.
+ */
+
 require realpath(__DIR__ . '/../vendor') . '/autoload.php';
 
 define ('__LOGO_DIR__', __DIR__ . '/../www/authentication/cached');
-
-function getInput() {
-  $handle = fopen ("php://stdin","r");
-  $line = fgets($handle);
-  return trim($line);
-}
-
-function getFromCurl($urlSuffix, $serviceRegistry) {
-  $curl = curl_init();
-  curl_setopt($curl, CURLOPT_URL, $serviceRegistry->url . $urlSuffix);
-  curl_setopt($curl, CURLOPT_HTTPHEADER, array("Content-type: application/json"));
-  curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, false);
-  curl_setopt($curl, CURLOPT_HTTPGET, true);
-  curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-
-  if (!empty($serviceRegistry->user)) {
-    $userstring = $serviceRegistry->user;
-    if (!empty($serviceRegistry->password)) {
-      $userstring.= ':' . $serviceRegistry->password;
-    }
-    curl_setopt($curl, CURLOPT_USERPWD, $userstring);
-  }
-
-  $data = curl_exec($curl);
-  if (curl_errno($curl)) {
-    print "Error: " . curl_error($curl) . " on " . $serviceRegistry->url . $urlSuffix;
-    exit(1);
-  }
-
-  $data = json_decode($data);
-  curl_close($curl);
-  return $data;
-}
-
-function loadService($id, $serviceRegistry) {
-  return getFromCurl("/$id", $serviceRegistry);
-}
-
-function createThumb($logoUrl) {
-  $cachedName = md5($logoUrl);
-  $cachedLocation = __LOGO_DIR__ . "/" . $cachedName . ".png";
-  $image = @file_get_contents($logoUrl);
-  if (!$image) {
-    return;
-  }
-  file_put_contents($cachedLocation, $image);
-  try {
-    $image = \PHPImageWorkshop\ImageWorkshop::initFromPath($cachedLocation);
-    $image->resizeInPixel(64, null, true);
-    $image->save(__LOGO_DIR__, $cachedName . ".png");
-  } catch(Exception $e) {
-    echo $e->getMessage();
-  }
-}
 
 $options = "s:u:p:";
 $inputOptions = getopt($options);
@@ -97,18 +51,72 @@ if (count($inputOptions) === 0) {
 
 $data = getFromCurl('', $registry);
 
-if (!property_exists($data, 'connections')) {
-  echo "Error: Invalid response, the key connections is not available";
+if ($data === null) {
+  file_put_contents('php://stderr', 'Error: Invalid response, no JSON received');
   exit(2);
+}
+
+if (!property_exists($data, 'connections')) {
+  file_put_contents('php://stderr', 'Error: Invalid response, the key connections is not available');
+  exit(3);
 }
 
 foreach ($data->connections as $srItem) {
   if (property_exists($srItem, 'id')) {
     $srId = $srItem->id;
-    $serviceData = loadService($srId, $registry);
+    $serviceData = getFromCurl("/$srId", $registry);
     $logo = @$serviceData->metadata->logo[0]->url;
     if (!is_null($logo)) {
       createThumb($logo);
     }
+  }
+}
+
+function getInput() {
+  $handle = fopen ("php://stdin","r");
+  $line = fgets($handle);
+  return trim($line);
+}
+
+function getFromCurl($urlSuffix, $serviceRegistry) {
+  $curl = curl_init();
+  curl_setopt($curl, CURLOPT_URL, $serviceRegistry->url . $urlSuffix);
+  curl_setopt($curl, CURLOPT_HTTPHEADER, array("Content-type: application/json"));
+  curl_setopt($curl, CURLOPT_HTTPGET, true);
+  curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+
+  if (!empty($serviceRegistry->user)) {
+    $curlUserPassword = $serviceRegistry->user;
+    if (!empty($serviceRegistry->password)) {
+      $curlUserPassword.= ':' . $serviceRegistry->password;
+    }
+    curl_setopt($curl, CURLOPT_USERPWD, $curlUserPassword);
+  }
+
+  $data = curl_exec($curl);
+  if (curl_errno($curl)) {
+    file_put_contents('php://stderr', "Error: " . curl_error($curl) . " on " . $serviceRegistry->url . $urlSuffix);
+    exit(1);
+  }
+
+  $data = json_decode($data);
+  curl_close($curl);
+  return $data;
+}
+
+function createThumb($logoUrl) {
+  $cachedName = md5($logoUrl);
+  $cachedLocation = __LOGO_DIR__ . "/" . $cachedName . ".png";
+  $image = @file_get_contents($logoUrl);
+  if (!$image) {
+    return;
+  }
+  file_put_contents($cachedLocation, $image);
+  try {
+    $image = \PHPImageWorkshop\ImageWorkshop::initFromPath($cachedLocation);
+    $image->resizeInPixel(64, null, true);
+    $image->save(__LOGO_DIR__, $cachedName . ".png");
+  } catch(Exception $e) {
+    echo $e->getMessage();
   }
 }
